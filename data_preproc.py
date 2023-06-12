@@ -1,4 +1,3 @@
-#%%
 import scipy.io as sio
 import numpy as np
 import csv
@@ -12,22 +11,19 @@ import datetime
 from sklearn.decomposition import FastICA
 import numpy.matlib as matlib
 from math import floor
-#%%
-#lfp1_data = np.load('lfp1_data.npy')
-lfp1_data = np.load('lfp1_preICA.npy')
-#lfp1_data = np.load('lfp1_zap_v2.npy')
-#%%
-#lfp2_data = np.load('lfp2_data.npy')
-lfp2_data = np.load('lfp2_preICA.npy')
-#lfp2_data = np.load('lfp2_zap.npy')
-#%%
+from sklearn.cluster import DBSCAN
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.model_selection import StratifiedShuffleSplit
 
+lfp1_data = np.load('lfp1_data.npy')
+lfp2_data = np.load('lfp2_postprocess.npy')
 with open('meta.pkl', 'rb') as fp:
     meta = pickle.load(fp)
 
 ratio = meta['ratio']
 freq = meta['fs']
-#%%
+# -----------------------------------------------------------------------------
+# This is the event data, you may change this to change the classification task
 params = sio.loadmat('Params_2018_06_06_Y.mat')["TrialsParameters"]
 rh_indexes = None
 with open('motorno.csv', newline='') as csvfile:
@@ -44,16 +40,26 @@ GraspEnd = params['TimeGraspEnd_samples'][0][0][0][rh_indexes]
 TrialEnd = params['TimeReward_samples'][0][0][0][rh_indexes]
 
 TrialEndFull = params['TimeReward_samples'][0][0][0]
+# -----------------------------------------------------------------------------
 
 structured_data = [[[] for _ in range(3)] for _ in range(len(CueOn))] # trial x classes x channels x time
 basefs = 4.8828125*10**3
 discarded = set()
 
 brain_areas = {"PMvR": (96, 96), "M1": (128, 128), "PMdR": (224, 224), "PMdL": (256, 256)}
-#%%
+back_mapping = [x for x in range(256)]
+"""
+# In case you want to load previously processed data
 with open('brain_areas.pkl', 'rb') as fp:
     brain_areas = pickle.load(fp)
-#%%
+with open('back_mapping.pkl', 'rb') as fp:
+    back_mapping = pickle.load(fp)
+"""
+
+
+#======================================================================
+# Plotting stuff
+#======================================================================
 import matplotlib.ticker as ticker
 fig, ax = plt.subplots()
 power, freq_=plt.psd(lfp2_data[1], Fs=freq)
@@ -63,9 +69,26 @@ ax.xaxis.set_minor_locator(ticker.AutoMinorLocator(4))
 
 plt.show()
 #%%
+plt.psd(lfp1_data[back_mapping[33]], Fs=freq)
+plt.show()
+#%%
+plt.psd(lfp2_data[back_mapping[12+128]-128], Fs=freq)
+plt.show()
+#%%
+from matplotlib.pyplot import specgram
+istart = int(CueOn[84]//ratio)
+istop = int(GraspEnd[84]//ratio)
+cind = back_mapping[12+128]-128
+powerSpectrum, freqenciesFound, time, imageAxis = specgram(lfp2_data[cind][istart:istop], Fs=int(freq))
+plt.xlabel('Time')
+plt.ylabel('Frequency')
+
+plt.show()   
+#%%
 # Power Spectral Densitity plot
-for x in lfp1_data:
+for x in lfp2_data[:back_mapping[96+128]-128]:
     plt.psd(x, Fs=freq)
+plt.title("PMdR Power Spectral Density Plot for all channels")
 plt.show()
 #%%
 # Power Spectral Densitity plot
@@ -130,7 +153,7 @@ lfp1_data = lfp1_data.astype(np.int16)
 print(datetime.datetime.now())
 
 #%%
-np.save('lfp1_zap_v2', lfp1_data)
+np.save('lfp1_zap', lfp1_data)
 #%%
 #LFP2
 print(datetime.datetime.now())
@@ -187,6 +210,13 @@ def process_indexes(bdict, indexes, offset=0):
         for x in bdict:
             if i+offset < bdict[x][0]:
                 bdict[x] = (bdict[x][0], bdict[x][1]-1)
+            
+def process_backmap(mapping, indexes, offset=0):
+    for i in indexes:
+        mapping[i+offset] = None
+        for j in range(i+offset+1,len(mapping)):
+            if mapping[j]:
+                mapping[j] -= 1
 
 #%%
 
@@ -194,15 +224,19 @@ print(brain_areas)
 print("Bad Channel Rejection")
 print("\tProcessing LFP1 data...")
 remaining_channels, bad_channels = std_bad_channels(lfp1_data)
+process_backmap(back_mapping, bad_channels)
 process_indexes(brain_areas, bad_channels)
 lfp1_data = lfp1_data[remaining_channels]
 print(brain_areas)
+print(back_mapping)
 #%%
 print("\tProcessing LFP2 data...")
 remaining_channels, bad_channels = std_bad_channels(lfp2_data)
+process_backmap(back_mapping, bad_channels, offset=128)
 process_indexes(brain_areas, bad_channels, offset=128)
 lfp2_data = lfp2_data[remaining_channels]
 print(brain_areas)
+print(back_mapping)
 
 #%%
 ############################################################
@@ -223,31 +257,7 @@ def perform_ICA(eeg_d, start, end, random_state=None, save=""):
         with open(save + '_ica.pkl', 'wb') as fp:
             pickle.dump(ica, fp)
     return ica, eeg_d_t
-#%%
-# PMvR
-eeg_data = lfp1_data[:brain_areas["PMvR"][1],:]
-eeg_data = np.transpose(eeg_data)
-# Create the info structure
-n_samples, n_channels = eeg_data.shape
 
-# Create an instance of ICA
-n_components = n_channels
-ica = FastICA(n_components=n_channels, random_state=42)
-
-# Fit the ICA model to your data
-eeg_data_t = ica.fit_transform(eeg_data)
-#%%
-np.save('PMvR', eeg_data_t)
-#%%
-# Plot components
-fig, axs = plt.subplots(n_components, 1, figsize=[128, 6*n_components], sharey=False, sharex=True)
-axs = axs.flatten()
-
-for x in range(n_components):
-    axs[x].plot(eeg_data_t[x,10000:30000], color='black', linewidth=1.5)
-
-plt.show()
-#%%
 #%%
 ############################################################
 #                          MARA                            #
@@ -361,40 +371,150 @@ def mara(ica, eeg_d, freq):
         features[2][ic] = lambda_par
         features[3][ic] = Hz8_13 # type: ignore
         features[4][ic] = fiterror
+    print("\nCompleted")
     return np.array(features).T
-print(mara(ica, eeg_data_t, freq))
 #%%
 ############################################################
 #                       ClusterMARA                        #
 ############################################################
 
 # PMvR
-ica, eeg_data_t = perform_ica(lfp1_data, 0, brain_areas["PMvR"][1], random_state=42, save="")
+ica1, eeg_data_t = perform_ICA(lfp1_data, 0, brain_areas["PMvR"][1], random_state=42, save="PMvR")
+np.save('PMvR', eeg_data_t)
+# M1
+ica2, eeg_data_t_2 = perform_ICA(lfp1_data, brain_areas["PMvR"][1], brain_areas["M1"][1], random_state=42, save="M1")
+np.save('M1', eeg_data_t_2)
+# PMdR
+ica3, eeg_data_t_3 = perform_ICA(lfp2_data, 0, brain_areas["PMdR"][1] - brain_areas["M1"][1], random_state=42, save="PMdR")
+np.save('PMdR', eeg_data_t_3)
+# PMdL
+ica4, eeg_data_t_4 = perform_ICA(lfp2_data, brain_areas["PMdR"][1] - brain_areas["M1"][1], brain_areas["PMdL"][1] - brain_areas["M1"][1], random_state=42, save="PMdL")
+np.save('PMdL', eeg_data_t_4)
+#%%
+eeg_data_t = np.load('PMvR.npy')
+with open('PMvR_ica.pkl', 'rb') as fp:
+    ica1 = pickle.load(fp)
+eeg_data_t_2 = np.load('M1.npy')
+with open('M1_ica.pkl', 'rb') as fp:
+    ica2 = pickle.load(fp)
+eeg_data_t_3 = np.load('PMdR.npy')
+with open('PMdR_ica.pkl', 'rb') as fp:
+    ica3 = pickle.load(fp)
+eeg_data_t_4 = np.load('PMdL.npy')
+with open('PMdL_ica.pkl', 'rb') as fp:
+    ica4 = pickle.load(fp)
+#%%
+# Calculate mara features
+PMvR_mara = mara(ica1, eeg_data_t, freq)
+M1_mara = mara(ica2, eeg_data_t_2, freq)
+PMdR_mara = mara(ica3, eeg_data_t_3, freq)
+PMdL_mara = mara(ica4, eeg_data_t_4, freq)
+#%%
+# MARA Clustering feature rejection
+print("Clustering...")
+# PMvR
+print("\tPMvR")
+clustering = DBSCAN(eps=2, min_samples=2)
+fitted = clustering.fit(PMvR_mara)
+rejected = np.where(fitted.labels_ == -1)[0]
+eeg_data_t[:, rejected] = 0
+ica1.inverse_transform(eeg_data_t, copy=False)
+# M1
+print("\tM1")
+clustering = DBSCAN(eps=2, min_samples=2)
+fitted = clustering.fit(M1_mara)
+rejected = np.where(fitted.labels_ == -1) + np.where(fitted.labels_ == 1) 
+eeg_data_t_2[:, rejected] = 0
+ica2.inverse_transform(eeg_data_t_2, copy=False)
+# PMdR
+print("\tPMdR")
+clustering = DBSCAN(eps=2, min_samples=2)
+fitted = clustering.fit(PMdR_mara)
+rejected = np.where(fitted.labels_ == -1)
+eeg_data_t_3[:, rejected] = 0
+ica3.inverse_transform(eeg_data_t_3, copy=False)
+# PMdL
+print("\tPMdL")
+clustering = DBSCAN(eps=2, min_samples=2)
+fitted = clustering.fit(PMdL_mara)
+rejected = np.where(fitted.labels_ == -1)
+eeg_data_t_4[:, rejected] = 0
+ica4.inverse_transform(eeg_data_t_4, copy=False)
+
+#%%
 
 """
 ---------------------------------------------------------------
 END OF PREPROCESSING
 ---------------------------------------------------------------
 """
+#==============================
+#       MARA Plotting
+#==============================
 #%%
 # show EEGs
-fig, ax = plt.subplots(facecolor='none')
+fig, ax = plt.subplots(nrows=8,facecolor='none')
 plt.subplots_adjust(hspace=0.2)  # Adjust the vertical spacing between subplots
 
 # Remove background and axes from each subplot
-ax.axis('off')
+for i in range(8):
+    ax[i].axis('off')
 
+values = {2: "tab:blue", 13: "tab:orange", 33:"tab:green", 49: "tab:red", 65: "tab:purple", 79: "tab:brown", 82: "tab:pink", 84: "tab:olive"}
 # Plot the data with black lines
-ax.plot(lfp1_data[0,10000:20000],color="black", linewidth=0.5)
-
+c = 0
+for x in values:
+    ax[c].plot(eeg_data_t.T[x,GraspStart[33]:GraspEnd[33]],color=values[x], linewidth=0.5)
+    c += 1
 
 # Adjust the figure size to make the plot more flat
-fig.set_size_inches(8, 2)  # Increase the width and reduce the height as per your preference
+fig.set_size_inches(8, 8)  # Increase the width and reduce the height as per your preference
 
 # Show the plot
 plt.show()
 #%%
+# Scatter plot
+fig, ax = plt.subplots(figsize=(8, 8), sharey=True)
+names = ["Spatial Range", "Alpha Log Band Power", "Lambda", "FitError", "Average Local Skewness 15s"]
 
+c = 0
+for x in values:
+    ax.scatter(names, PMvR_mara[x,:5],color=values[x])    
+c += 1
+fig.autofmt_xdate(rotation=45)
+plt.show()
+
+#%%
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+
+mara_data =PMvR_mara[:,:5]
+
+pca = PCA()
+
+principalComponents = pca.fit_transform(mara_data)
+#%%
+fig = plt.figure(figsize = (8,8))
+ax = fig.add_subplot(1,1,1) 
+ax.set_xlabel('Principal Component 1', fontsize = 15)
+ax.set_ylabel('Principal Component 2', fontsize = 15)
+ax.set_title('Clusters of MARA Features', fontsize = 20)
+
+colors = ['r', 'g', 'b', 'c', 'm']
+for target, color in zip(np.unique(fitted.labels_), colors):
+    indexes_class = np.where(fitted.labels_ == target)
+    ax.scatter(principalComponents[indexes_class,0]
+               , principalComponents[indexes_class,1]
+               , c = color
+               , s = 50)
+ax.legend(np.unique(fitted.labels_))
+ax.grid()
+#%%
+
+
+#==============================
+#          Epoching
+#==============================
 for i in range(len(CueOn)):
     templs = list()
     cOn = CueOn[i]
@@ -433,62 +553,10 @@ for i in range(len(CueOn)):
     structured_data[i][2] = lfp1_data[:, fstart:fend].tolist() + lfp2_data[:, fstart:fend].tolist()
     if duration < 501:
         discarded.add(i)
-    # postgrasp
-    """
-    fstart = int(gEnd//ratio)
-    fend = int(tEnd//ratio)
-    if(fstart>fend):
-        print("postgrasp wtf", fstart-fend)
-    duration = fend-fstart
-    fend = fstart + midpoint + 250
-    fstart = fstart + midpoint - 250
-    structured_data[i][3] = lfp1_data[:, fstart:fend].tolist() + lfp2_data[:, fstart:fend].tolist()
-    if duration < 501:
-        discarded.add(i)"""
 
 for x in sorted(list(discarded),reverse=True):
     structured_data.pop(x)
 
 structured_data = np.array(structured_data)
 
-np.save('structured_data', structured_data)
-#%%
-
-"""
-prev = TrialEndFull[0]
-sumt = 0
-for i in range(1,len(TrialEndFull)):
-    curr = TrialEndFull[i]
-    for y in streams:
-        ratio = streams[y]['ratio']
-        fs = streams[y]['fs']
-        sdata = streams[y]['data']
-        fstart = int(prev//ratio)
-        fend = int(curr//ratio)
-        if y == 'LFP1':
-            print("length trial", (fend-fstart)*1/float(fs))
-            sumt += fend-fstart
-    prev = curr
-print(sumt)
-
-
-for y in streams:
-    templs = []
-    ratio = streams[y]['ratio']
-    sdata = streams[y]['data']
-    print(y)
-    print(sdata.shape)
-    # prereach
-    for start, end in zip(CueOn, CueOff):
-        fstart = int(start//ratio)
-        fend = int(end//ratio)
-        print(fstart, fend)
-        templs.append(sdata[:, fstart:fend])
-    # reach
-    # grasp
-    # postgrasp
-    print(templs[0])
-    print("-"*100)
-"""
-
-# %%
+np.save('structured_data_band_zap_chrej', structured_data)

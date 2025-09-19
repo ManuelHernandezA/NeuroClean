@@ -1,3 +1,4 @@
+#%%
 import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
@@ -7,7 +8,7 @@ from sklearn.metrics import confusion_matrix
 from sklearn.pipeline import Pipeline
 from sklearn.feature_selection import RFE
 from copy import deepcopy
-from statsmodels.stats.weightstats import ztest
+#from statsmodels.stats.weightstats import ztest
 
 def performance_params(cnf_matrix):
     print(cnf_matrix)
@@ -44,8 +45,8 @@ def performance_params(cnf_matrix):
 
 stepdata = "full"
 
-data = np.load('structured_data_' + stepdata + '.npy')
-
+data = np.load('../structured_data_' + stepdata + '.npy')
+print(data.shape)
 features = [[] for _ in range(data.shape[1])]
 # Feature extraction
 for trial in data:

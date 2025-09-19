@@ -1,3 +1,4 @@
+#%%
 import scipy.io as sio
 import numpy as np
 import csv
@@ -15,34 +16,37 @@ from sklearn.cluster import DBSCAN
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import StratifiedShuffleSplit
 
-lfp1_data = np.load('lfp1_data.npy')
-lfp2_data = np.load('lfp2_postprocess.npy')
-with open('meta.pkl', 'rb') as fp:
+lfp1_data = np.load('../lfp1_data.npy')
+lfp2_data = np.load('../lfp2_postprocess.npy')
+with open('../meta.pkl', 'rb') as fp:
     meta = pickle.load(fp)
 
 ratio = meta['ratio']
 freq = meta['fs']
 # -----------------------------------------------------------------------------
 # This is the event data, you may change this to change the classification task
-params = sio.loadmat('Params_2018_06_06_Y.mat')["TrialsParameters"]
+params = sio.loadmat('../Params_2018_06_06_Y.mat')["TrialsParameters"]
 rh_indexes = None
-with open('motorno.csv', newline='') as csvfile:
+with open('../motorno.csv', newline='') as csvfile:
     spamreader = csv.reader(csvfile, delimiter=',', quotechar='"')
     for row in spamreader:
         rh_indexes = np.array(row)
 
-rh_indexes = np.where(rh_indexes == '4')
+rh_indexes = np.where(rh_indexes != 'all')
 
 CueOn = params['TimeCueOn_samples'][0][0][0][rh_indexes]
 CueOff = params['TimeCueOff_samples'][0][0][0][rh_indexes]
 GraspStart = params['TimeGraspStart_samples'][0][0][0][rh_indexes]
-GraspEnd = params['TimeGraspEnd_samples'][0][0][0][rh_indexes]
+GraspMax = params['TimeGraspMax_samples'][0][0][0][rh_indexes]
 TrialEnd = params['TimeReward_samples'][0][0][0][rh_indexes]
+GraspEnd = params['TimeGraspEnd_samples'][0][0][0][rh_indexes]
 
+TimeExit = params['TimeExitHP_samples'][0][0][0][rh_indexes]
 TrialEndFull = params['TimeReward_samples'][0][0][0]
+#%%
 # -----------------------------------------------------------------------------
 
-structured_data = [[[] for _ in range(3)] for _ in range(len(CueOn))] # trial x classes x channels x time
+structured_data = [[[] for _ in range(5)] for _ in range(len(CueOn))] # trial x classes x channels x time
 basefs = 4.8828125*10**3
 discarded = set()
 
@@ -56,7 +60,7 @@ with open('back_mapping.pkl', 'rb') as fp:
     back_mapping = pickle.load(fp)
 """
 
-
+#%%
 #======================================================================
 # Plotting stuff
 #======================================================================
@@ -391,17 +395,17 @@ np.save('PMdR', eeg_data_t_3)
 ica4, eeg_data_t_4 = perform_ICA(lfp2_data, brain_areas["PMdR"][1] - brain_areas["M1"][1], brain_areas["PMdL"][1] - brain_areas["M1"][1], random_state=42, save="PMdL")
 np.save('PMdL', eeg_data_t_4)
 #%%
-eeg_data_t = np.load('PMvR.npy')
-with open('PMvR_ica.pkl', 'rb') as fp:
+eeg_data_t = np.load('../PMvR.npy')
+with open('../PMvR_ica.pkl', 'rb') as fp:
     ica1 = pickle.load(fp)
-eeg_data_t_2 = np.load('M1.npy')
-with open('M1_ica.pkl', 'rb') as fp:
+eeg_data_t_2 = np.load('../M1.npy')
+with open('../M1_ica.pkl', 'rb') as fp:
     ica2 = pickle.load(fp)
-eeg_data_t_3 = np.load('PMdR.npy')
-with open('PMdR_ica.pkl', 'rb') as fp:
+eeg_data_t_3 = np.load('../PMdR.npy')
+with open('../PMdR_ica.pkl', 'rb') as fp:
     ica3 = pickle.load(fp)
-eeg_data_t_4 = np.load('PMdL.npy')
-with open('PMdL_ica.pkl', 'rb') as fp:
+eeg_data_t_4 = np.load('../PMdL.npy')
+with open('../PMdL_ica.pkl', 'rb') as fp:
     ica4 = pickle.load(fp)
 #%%
 # Calculate mara features
@@ -423,23 +427,27 @@ ica1.inverse_transform(eeg_data_t, copy=False)
 print("\tM1")
 clustering = DBSCAN(eps=2, min_samples=2)
 fitted = clustering.fit(M1_mara)
-rejected = np.where(fitted.labels_ == -1) + np.where(fitted.labels_ == 1) 
+rejected = np.where(fitted.labels_ == -1)[0]
 eeg_data_t_2[:, rejected] = 0
 ica2.inverse_transform(eeg_data_t_2, copy=False)
 # PMdR
 print("\tPMdR")
 clustering = DBSCAN(eps=2, min_samples=2)
 fitted = clustering.fit(PMdR_mara)
-rejected = np.where(fitted.labels_ == -1)
+rejected = np.where(fitted.labels_ == -1)[0]
 eeg_data_t_3[:, rejected] = 0
 ica3.inverse_transform(eeg_data_t_3, copy=False)
 # PMdL
 print("\tPMdL")
 clustering = DBSCAN(eps=2, min_samples=2)
 fitted = clustering.fit(PMdL_mara)
-rejected = np.where(fitted.labels_ == -1)
+rejected = np.where(fitted.labels_ == -1)[0]
 eeg_data_t_4[:, rejected] = 0
 ica4.inverse_transform(eeg_data_t_4, copy=False)
+#%%
+lfp1_data = np.hstack([eeg_data_t, eeg_data_t_2]).T
+lfp2_data = np.hstack([eeg_data_t_3, eeg_data_t_4]).T
+print(lfp1_data.shape, lfp2_data.shape)
 
 #%%
 
@@ -515,48 +523,71 @@ ax.grid()
 #==============================
 #          Epoching
 #==============================
+
+timesteps = 300
+structured_data = [[[] for _ in range(5)] for _ in range(len(CueOn))] # trial x classes x channels x time
 for i in range(len(CueOn)):
     templs = list()
     cOn = CueOn[i]
     cOff = CueOff[i]
     gStart = GraspStart[i]
-    gEnd = GraspEnd[i]
+    gMax = GraspMax[i]
     tEnd = TrialEnd[i]
-
+    gEnd = GraspEnd[i]
     
     # prereach
     fstart = int(cOn//ratio)
     fend = int(cOff//ratio)
     duration = fend-fstart
     midpoint = (fend-fstart)//2
-    fend = fstart + midpoint + 250
-    fstart = fstart + midpoint - 250
+    fend = fstart + midpoint + timesteps//2
+    fstart = fstart + midpoint - timesteps//2
     structured_data[i][0] = lfp1_data[:, fstart:fend].tolist() + lfp2_data[:, fstart:fend].tolist()
-    if duration < 501:
+    if duration <= timesteps:
         discarded.add(i)
     # reach
     fstart = int(cOff//ratio)
     fend = int(gStart//ratio)
     duration = fend-fstart
     midpoint = (fend-fstart)//2
-    fend = fstart + midpoint + 250
-    fstart = fstart + midpoint - 250
+    fend = fstart + midpoint + timesteps//2
+    fstart = fstart + midpoint - timesteps//2
     structured_data[i][1] = lfp1_data[:, fstart:fend].tolist() + lfp2_data[:, fstart:fend].tolist()
-    if duration < 501:
+    if duration <= timesteps:
         discarded.add(i)
-    # grasp
+    # grasp max
     fstart = int(gStart//ratio)
+    fend = int(gMax//ratio)
+    duration = fend-fstart
+    fend = fstart + midpoint + timesteps//2
+    fstart = fstart + midpoint - timesteps//2
+    structured_data[i][2] = lfp1_data[:, fstart:fend].tolist() + lfp2_data[:, fstart:fend].tolist()
+    if duration <= timesteps:
+        discarded.add(i)
+    # reward
+    fstart = int(gMax//ratio)
+    fend = int(tEnd//ratio)
+    duration = fend-fstart
+    fend = fstart + midpoint + timesteps//2
+    fstart = fstart + midpoint - timesteps//2
+    structured_data[i][3] = lfp1_data[:, fstart:fend].tolist() + lfp2_data[:, fstart:fend].tolist()
+    if duration <= timesteps:
+        discarded.add(i)
+    # release
+    fstart = int(tEnd//ratio)
     fend = int(gEnd//ratio)
     duration = fend-fstart
-    fend = fstart + midpoint + 250
-    fstart = fstart + midpoint - 250
-    structured_data[i][2] = lfp1_data[:, fstart:fend].tolist() + lfp2_data[:, fstart:fend].tolist()
-    if duration < 501:
+    fend = fstart + midpoint + timesteps//2
+    fstart = fstart + midpoint - timesteps//2
+    structured_data[i][4] = lfp1_data[:, fstart:fend].tolist() + lfp2_data[:, fstart:fend].tolist()
+    if duration <= timesteps:
         discarded.add(i)
 
 for x in sorted(list(discarded),reverse=True):
     structured_data.pop(x)
 
 structured_data = np.array(structured_data)
+print(structured_data.shape)
+np.save('structured_data_full_5classes_300', structured_data)
 
-np.save('structured_data_band_zap_chrej', structured_data)
+# %%
